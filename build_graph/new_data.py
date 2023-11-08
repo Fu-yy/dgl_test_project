@@ -11,8 +11,10 @@ import os
 from dgl import save_graphs
 from joblib import Parallel, delayed
 
-
 # 计算item序列的相对次序
+from utils import load_csv_resort_id, print_graph
+
+
 def cal_order(data):
     '''
     函数用于计算data中物品序列的相对次序。它首先根据时间（'time'）列对data进行排序，
@@ -73,6 +75,7 @@ def generate_graph(data):
     # 对处理后的数据按照物品ID进行分组，并通过调用cal_u_order函数为每个物品的交互记录计算相对次序。最后通过reset_index(drop=True)重置索引。
     data = data.groupby('item_id').apply(cal_u_order).reset_index(drop=True)
 
+    print(data.head(60))
     # 将处理后的数据中的用户ID列转换为NumPy数组。/
     user = data['user_id'].values
     # 将处理后的数据中的物品ID列转换为NumPy数组。
@@ -82,40 +85,81 @@ def generate_graph(data):
     time = data['time'].values
 
     # 将处理后的数据中的like和click列转换为NumPy数组。
-    # click = data['click'].values
-    #
-    # like = data['like'].values
+    click = data['click'].values
 
+    like = data['like'].values
 
+    click_data = data[data['click'] == 1]
+    like_data = data[data['like'] == 1]
+
+    click_data_user = click_data['user_id'].values
+    click_data_item = click_data['item_id'].values
+    click_data_time = click_data['time'].values
+
+    like_data_user = like_data['user_id'].values
+
+    tensorData = torch.tensor(like_data_user)
+
+    # print(like_data_user)
+    # print(tensorData)
+
+    like_data_item = like_data['item_id'].values
+    like_data_time = like_data['time'].values
+    combined_like_click_user = np.concatenate((click_data_user, like_data_user))
+    combined_like_click_item = np.concatenate((click_data_item, like_data_item))
+
+    # combined_like_click_user = np.unique(combined_like_click_user)
+    # combined_like_click_item = np.unique(combined_like_click_item)
 
     # 是否可以加边，user--user  item--item
     # 构建了一个字典graph_data，其中包含了两种类型的边：由物品到用户的边（'item'到'user'）和由用户到物品的边（'user'到'item'）。每条边的值是一个元组，包含了源节点和目标节点的张量表示。
-    graph_data = {('item', 'by', 'user'): (torch.tensor(item), torch.tensor(user)),
-                  ('user', 'pby', 'item'): (torch.tensor(user), torch.tensor(item))}
+
+    graph_data = {('item', 'click_by', 'user'): (torch.tensor(click_data_item), torch.tensor(click_data_user)),
+                  ('user', 'click', 'item'): (torch.tensor(click_data_user), torch.tensor(click_data_item)),
+                  ('item', 'like_by', 'user'): (torch.tensor(like_data_item), torch.tensor(like_data_user)),
+                  ('user', 'like', 'item'): (torch.tensor(like_data_user), torch.tensor(like_data_item)),
+                  }
     # 使用dgl.heterograph函数创建一个异构图（heterograph），根据graph_data中的边和节点信息构建图。
-    graph = dgl.heterograph(graph_data)
 
-    # print(graph.number_of_nodes('item'))
+    # 指定类型节点的个数
+    num_nodes_dict = {
+        'user': len(np.unique(user)),
+        'item': len(np.unique(item)),
 
-    # 将图中由用户到物品的边（'by'类型）的时间属性（'time'）设置为time的张量表示。
-    graph.edges['by'].data['time'] = torch.LongTensor(time)
+    }
 
-    # 将图中由物品到用户的边（'pby'类型）的时间属性（'time'）设置为time的张量表示
-    graph.edges['pby'].data['time'] = torch.LongTensor(time)
-    # graph.edges['by'].data['t'] = torch.tensor(data['order'])
-    # graph.edges['by'].data['rt'] = torch.tensor(data['re_order'])
-    # graph.edges['pby'].data['t'] = torch.tensor(data['u_order'])
-    # graph.edges['pby'].data['rt'] = torch.tensor(data['u_re_order'])
+    graph = dgl.heterograph(graph_data, num_nodes_dict)
+
+    print_graph(graph)
+
+    # 将图中由用户到物品的边（'click_by'类型）的时间属性（'time'）设置为time的张量表示。
+    graph.edges['click_by'].data['time'] = torch.LongTensor(click_data_time)
+
+    # 将图中由物品到用户的边（'click'类型）的时间属性（'time'）设置为time的张量表示
+    graph.edges['click'].data['time'] = torch.LongTensor(click_data_time)
+
+    # 将图中由用户到物品的边（'click_by'类型）的时间属性（'time'）设置为time的张量表示。
+    graph.edges['like_by'].data['time'] = torch.LongTensor(like_data_time)
+
+    # 将图中由物品到用户的边（'click'类型）的时间属性（'time'）设置为time的张量表示
+    graph.edges['like'].data['time'] = torch.LongTensor(like_data_time)
 
     # 将图中用户节点的属性（'user_id'）设置为唯一的用户ID的张量表示。
+    # graph.nodes['user'].data['user_id'] = torch.LongTensor(np.unique(user))
     graph.nodes['user'].data['user_id'] = torch.LongTensor(np.unique(user))
 
-    # print(graph.number_of_nodes('item'))
-
+    print_graph(graph)
     # 将图中物品节点的属性（'item_id'）设置为唯一的物品ID的张量表示
+    # graph.nodes['item'].data['item_id'] = torch.LongTensor(np.unique(item))
     graph.nodes['item'].data['item_id'] = torch.LongTensor(np.unique(item))
-    # graph.nodes['item'].data['last_user'] = torch.tensor(data['u_last'])
-    # graph.nodes['user'].data['last_item'] = torch.tensor(data['last'])
+    #
+
+    print_graph(graph)
+    # print(graph.ndata)
+    # print(graph.nodes['user'].data)
+    # print(graph.nodes['item'].data)
+    # print(graph.nodes['user'].data['user_id'])
+    # print(graph.nodes['item'].data['item_id'])
     return graph
 
 
@@ -162,32 +206,40 @@ def generate_user(user, data, graph, item_max_length, user_max_length, train_pat
                 start_t = u_time[j - item_max_length]
 
             # 根据给定的时间范围，选择图中与当前用户相关的边的索引。sub_u_eid是一个布尔数组，指示哪些边满足时间范围条件。
-            sub_u_eid = (graph.edges['by'].data['time'] < u_time[j + 1]) & (graph.edges['by'].data['time'] >= start_t)
+            sub_u_eid_click = (graph.edges['click'].data['time'] < u_time[j + 1]) & (
+                    graph.edges['click'].data['time'] >= start_t)
+            sub_i_eid_click_by = (graph.edges['click_by'].data['time'] < u_time[j + 1]) & (
+                    graph.edges['click_by'].data['time'] >= start_t)
+            # sub_u_eid = (graph.edges['by'].data['time'] < u_time[j + 1]) & (graph.edges['by'].data['time'] >= start_t)
             # 根据给定的时间范围，选择图中与当前物品相关的边的索引。sub_i_eid是一个布尔数组，指示哪些边满足时间范围条件。
-            sub_i_eid = (graph.edges['pby'].data['time'] < u_time[j + 1]) & (graph.edges['pby'].data['time'] >= start_t)
+            sub_u_eid_like = (graph.edges['like'].data['time'] < u_time[j + 1]) & (
+                    graph.edges['like'].data['time'] >= start_t)
+            sub_i_eid_like_by = (graph.edges['like_by'].data['time'] < u_time[j + 1]) & (
+                    graph.edges['like_by'].data['time'] >= start_t)
             # 根据选择的边构建子图sub_graph，这个子图包含了在给定时间范围内与当前用户和物品相关的边。----根据这些边构建子图
-            sub_graph = dgl.edge_subgraph(graph, edges={'by': sub_u_eid, 'pby': sub_i_eid}, relabel_nodes=False)
+            sub_graph = dgl.edge_subgraph(graph, edges={'click': sub_u_eid_click, 'click_by': sub_i_eid_click_by,
+                                                        'like': sub_u_eid_like, 'like_by': sub_i_eid_like_by
 
-            # node_types = sub_graph.ntypes
-            # edge_types = sub_graph.etypes
-            # print(" sub_graph Node data:")
-            # for ntype in node_types:
-            #     print(f"sub_graph Nodes of type '{ntype}':")
-            #     print(sub_graph.nodes[ntype].data)
-            #
-            # print("sub_graph Edge data:")
-            # for etype in edge_types:
-            #     print(f"sub_graph Edges of type '{etype}':")
-            #     print(sub_graph.edges[etype].data)
+                                                        },
+                                          relabel_nodes=False)
+
+            print_graph(sub_graph)
 
             # 将当前用户ID转换为张量u_temp。
-            u_temp = torch.tensor([user])
+            u_temp_click = torch.tensor([user])
+            u_temp_like = torch.tensor([user])
             # 将当前用户ID转换为张量 his_user，用于存储历史用户ID。
-            his_user = torch.tensor([user])
+            his_user_click = torch.tensor([user])
+            his_user_like = torch.tensor([user])
 
+            print("graph_i:------torch.unique(torch.cat((u_temp_click, u_temp_like), 1, ))")
+            test_item_02 =torch.unique(torch.cat((u_temp_click, u_temp_like), -1, ))
+            print(test_item_02)
             # 根据时间权重和item_max_length选择与当前用户相关的前item_max_length个物品节点，构建子图graph_i。
-            graph_i = select_topk(sub_graph, item_max_length, weight='time', nodes={'user': u_temp})
+            graph_i = select_topk(sub_graph, item_max_length, weight='time',
+                                  nodes={'user': torch.cat((u_temp_click, u_temp_like), -1, )})
 
+            print_graph(graph_i)
             '''
                dgl.sampling.select_topk(g, k, weight, nodes=None, edge_dir='in', ascending=False, copy_ndata=True, copy_edata=True)
                  dgl库中的一个函数，用于从图中选择与给定节点相关的具有 k 个最大或最小权重的相邻边，然后返回由这些边所引入的子图。
@@ -204,69 +256,89 @@ def generate_user(user, data, graph, item_max_length, user_max_length, train_pat
                 copy_edata: 一个布尔值，指定是否将边特征数据复制到子图中。
             '''
 
-            # node_types = graph_i.ntypes
-            # edge_types = graph_i.etypes
-            # print(" graph_i Node data:")
-            # for ntype in node_types:
-            #     print(f"graph_i Nodes of type '{ntype}':")
-            #     print(graph_i.nodes[ntype].data)
-            #
-            # print("graph_i Edge data:")
-            # for etype in edge_types:
-            #     print(f"graph_i Edges of type '{etype}':")
-            #     print(graph_i.edges[etype].data)
-
             # 从graph_i中获取物品节点的唯一标识，并存储在张量i_temp中，用于存储历史物品ID。
 
-            i_temp = torch.unique(graph_i.edges(etype='by')[0])
+            item_like_by = graph_i.edges(etype='like_by')  # 没用
+            item_click_by = graph_i.edges(etype='click_by')  # 没用
+
+            i_temp_like_by = torch.unique(graph_i.edges(etype='like_by')[0])
+            i_temp_click_by = torch.unique(graph_i.edges(etype='click_by')[0])
+            # i_temp = torch.unique(graph_i.edges(etype='click')[0])
 
             # 从graph_i中获取物品节点的唯一标识，并存储在张量his_item中，用于存储历史物品ID。
-            his_item = torch.unique(graph_i.edges(etype='by')[0])
+            his_item_like_by = torch.unique(graph_i.edges(etype='like_by')[0])
+            his_item_click_by = torch.unique(graph_i.edges(etype='click_by')[0])
+            # his_item = torch.unique(graph_i.edges(etype='click')[0])
 
             #  从graph_i中获取边的全局ID，并将结果存储在名为edge_i的列表中。
-            edge_i = [graph_i.edges['by'].data[dgl.NID]]
-
-            # print(i_temp)
-            # print(his_item)
-            # print(edge_i)
+            edge_i_click_by = [graph_i.edges['click_by'].data[dgl.NID]]
+            edge_i_like_by = [graph_i.edges['like_by'].data[dgl.NID]]
 
             # 初始化名为edge_u的空列表，用于存储用户的边的全局ID。
-            edge_u = []
+            edge_u_like = []
+            edge_u_click = []
             # 迭代k_hop-1次，用于生成多跳子图。
             for _ in range(k_hop - 1):
                 # 根据时间权重和user_max_length选择与历史物品节点相关的前user_max_length个用户节点，构建子图graph_u。
-                graph_u = select_topk(sub_graph, user_max_length, weight='time', nodes={'item': i_temp})  # item的邻居user
+
+                print(
+                    "for里面的 graph_u:-------torch.unique(torch.unique(torch.cat((i_temp_like_by, i_temp_click_by), 1)))")
+                print(
+                    np.unique(np.concatenate((i_temp_like_by,i_temp_click_by))))
+                graph_u = select_topk(sub_graph, user_max_length, weight='time',
+                                      nodes={'item':np.unique(np.concatenate((i_temp_like_by,i_temp_click_by)))})  # item的邻居user
 
                 # 从graph_u中获取用户节点的唯一标识，确保这些节点不在历史用户ID中，并选择最后user_max_length个节点。将结果存储在u_temp中。
-                u_temp = np.setdiff1d(torch.unique(graph_u.edges(etype='pby')[0]), his_user)[-user_max_length:]
+                u_temp_click = np.setdiff1d(torch.unique(graph_u.edges(etype='click')[0]), his_user_click)[
+                                            -user_max_length:]
+                u_temp_like = np.setdiff1d(torch.unique(graph_u.edges(etype='like')[0]), his_user_like)[
+                                           -user_max_length:]
                 # u_temp = torch.unique(torch.cat((u_temp, graph_u.edges(etype='pby')[0])))
 
                 # 根据时间权重和item_max_length选择与历史用户节点相关的前item_max_length个物品节点，构建子图graph_i。
-                graph_i = select_topk(sub_graph, item_max_length, weight='time', nodes={'user': u_temp})
+
+
+                test_item = np.unique(np.concatenate((u_temp_click, u_temp_like)))
+
+                graph_i = select_topk(sub_graph, item_max_length, weight='time',
+                                      nodes={'user': np.unique(np.concatenate((u_temp_click, u_temp_like)))})
 
                 # 将u_temp和his_user中的用户ID合并，并去除重复项，更新his_user。
-                his_user = torch.unique(torch.cat([torch.tensor(u_temp), his_user]))
+                his_user_click = torch.unique(torch.cat([torch.tensor(u_temp_click), his_user_click]))
+                his_user_like = torch.unique(torch.cat([torch.tensor(u_temp_like), his_user_like]))
                 # i_temp = torch.unique(torch.cat((i_temp, graph_i.edges(etype='by')[0])))
                 # 从graph_i中获取物品节点的唯一标识，确保这些节点不在历史物品ID中。将结果存储在i_temp中。
-                i_temp = np.setdiff1d(torch.unique(graph_i.edges(etype='by')[0]), his_item)
+                i_temp_like_by = np.setdiff1d(torch.unique(graph_i.edges(etype='like_by')[0]), his_item_like_by)
+
+
+                i_temp_click_by = np.setdiff1d(torch.unique(graph_i.edges(etype='click_by')[0]), his_item_click_by)
 
                 # 将i_temp和his_item中的物品ID合并，并去除重复项，更新his_item
-                his_item = torch.unique(torch.cat([torch.tensor(i_temp), his_item]))
+                his_item_like_by = torch.unique(torch.cat((torch.tensor(i_temp_like_by), his_item_like_by),-1))
+                his_item_click_by = torch.unique(torch.cat((torch.tensor(i_temp_click_by), his_item_click_by),-1))
 
                 # 从graph_i中获取边的全局ID，并将结果添加到edge_i列表中。
-                edge_i.append(graph_i.edges['by'].data[dgl.NID])
+                edge_i_click_by.append(graph_i.edges['click_by'].data[dgl.NID])
+                edge_i_like_by.append(graph_i.edges['like_by'].data[dgl.NID])
 
                 # 从graph_u中获取边的全局ID，并将结果添加到edge_u列表中。
-                edge_u.append(graph_u.edges['pby'].data[dgl.NID])
+                edge_u_like.append(graph_u.edges['like'].data[dgl.NID])
+                edge_u_click.append(graph_u.edges['click'].data[dgl.NID])
             # 将edge_u列表中的边的全局ID合并，并去除重复项，存储在all_edge_u中。
-            all_edge_u = torch.unique(torch.cat(edge_u))
+            all_edge_u_like = torch.unique(torch.cat(edge_u_like))
+            all_edge_u_click = torch.unique(torch.cat(edge_u_click))
 
             # 将edge_i列表中的边的全局ID合并，并去除重复项，存储在all_edge_i中。
-            all_edge_i = torch.unique(torch.cat(edge_i))
+            all_edge_i_like_by = torch.unique(torch.cat(edge_i_like_by))
+            all_edge_i_click_by = torch.unique(torch.cat(edge_i_click_by))
 
             # 根据选择的边构建最终的子图fin_graph，该子图包含与历史用户和物品相关的边。
-            fin_graph = dgl.edge_subgraph(sub_graph, edges={'by': all_edge_i, 'pby': all_edge_u})
+            fin_graph = dgl.edge_subgraph(sub_graph, edges={'like': all_edge_u_like, 'click': all_edge_u_click,
+                                                            'like_by': all_edge_i_like_by,
+                                                            'click_by': all_edge_i_click_by
 
+                                                            })
+            print_graph(fin_graph)
             # 获取当前时间点的下一个物品ID，作为目标。
             target = u_seq[j + 1]
 
@@ -287,6 +359,19 @@ def generate_user(user, data, graph, item_max_length, user_max_length, train_pat
             # print(u_alis)
             # print(last_alis)
             # 训练集
+            if u_alis.numel() == 0:
+                print('u_alis为空')
+            if last_alis.numel() == 0:
+                print('last_alis为空')
+            print(user)
+            print(target)
+            print(u_alis)
+            print(last_alis)
+            # graph_data = {'user': torch.tensor([user]), 'target': torch.tensor([target]), 'u_alis': u_alis,
+            #                  'last_alis': last_alis}
+
+
+
             if j < split_point - 1:
                 save_graphs(train_path + '/' + str(user) + '/' + str(user) + '_' + str(j) + '.bin', fin_graph,
                             {'user': torch.tensor([user]), 'target': torch.tensor([target]), 'u_alis': u_alis,
@@ -346,7 +431,7 @@ def generate_data(data, graph, item_max_length, user_max_length, train_path, tes
     # 处理每个任务的结果
     for result in results:
         # 在这里处理每个任务的结果
-        print("result")
+        print("result:(train_num, test_num)")
         print(result)
     # results
     return results
@@ -366,21 +451,17 @@ def mainLoadData(data, job, item_max_length, user_max_length, k_hop, result_path
 
     # 这部分代码根据数据集名称构建数据路径和图路径。然后读取数据集文件（csv格式）并对用户ID进行分组，应用refine_time函数进行时间处理，并重置索引。最后将时间列转换为整数类型。
 
-    # 添加绝对路径
-    My_path = os.path.dirname(__file__)
+    # My_path--获取当前路径的上一层
+    My_path = os.path.dirname(os.path.dirname(__file__))
 
     My_path.replace('/', '\\')
 
     data_path = os.path.join(My_path, 'Data', opt.data + '.csv')
     graph_path = os.path.join(My_path, 'Data', opt.data + '_graph.bin')
-    data = pd.read_csv(data_path).groupby('user_id').apply(refine_time).reset_index(drop=True)  # 读取数据根据userid分组且根据时间排序
-    data['time'] = data['time'].astype('int64')
 
-    # print(data.head(30))
-    # if opt.graph:
-    #     graph = generate_graph(data)
-    #     save_graphs(graph_path, graph)
-    # else:
+    csv_resort = load_csv_resort_id(data_path)[['user_id', 'item_id', 'click', 'like', 'time']]
+    data = csv_resort.groupby('user_id').apply(refine_time).reset_index(drop=True)  # 读取数据根据userid分组且根据时间排序
+    data['time'] = data['time'].astype('int64')
 
     # 这部分代码判断图数据是否已存在。如果图数据文件不存在，则调用generate_graph函数生成图数据，并使用save_graphs函数保存图数据到图路径。如果图数据文件已存在，则使用dgl.load_graphs函数加载图数据。
     if not os.path.exists(graph_path):
@@ -390,7 +471,7 @@ def mainLoadData(data, job, item_max_length, user_max_length, k_hop, result_path
         graph = dgl.load_graphs(graph_path)[0][0]
 
     # 这部分代码根据命令行参数创建训练集、验证集和测试集的存储路径。
-
+    # test_graph = graph.nodes()
     train_path = os.path.join(My_path, 'Newdata',
                               opt.data + '_' + str(opt.item_max_length) + '_' + str(opt.user_max_length) + '_' + str(
                                   opt.k_hop),
